@@ -1,0 +1,282 @@
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.0.1
+    platform: linux/amd64
+    labels:
+      - "app=kafka-stack"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2185
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2185:2185"
+
+  kafka:
+    image: confluentinc/cp-kafka:7.0.1
+    platform: linux/amd64
+    labels:
+      - "app=kafka-stack"
+    depends_on:
+      - zookeeper
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "9092"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    ports:
+      - "9092:9092"
+      - "9093:9093"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2185
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT_INTERNAL:PLAINTEXT,PLAINTEXT_EXTERNAL:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT_INTERNAL://kafka:9092,PLAINTEXT_EXTERNAL://kafka:9093
+      KAFKA_LISTENERS: PLAINTEXT_INTERNAL://0.0.0.0:9092,PLAINTEXT_EXTERNAL://0.0.0.0:9093
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT_INTERNAL
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_CONFLUENT_SUPPORT_METRICS_ENABLE: 'false'
+
+
+  schema-registry:
+    image: confluentinc/cp-schema-registry:7.0.1
+    platform: linux/amd64
+    labels:
+      - "app=kafka-stack"
+    depends_on:
+      - kafka
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/subjects"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    ports:
+      - "8081:8081"
+    environment:
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: PLAINTEXT://kafka:9092
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+
+  connect:
+    image: debezium/connect:1.9
+    platform: linux/amd64
+    labels:
+      - "app=kafka-stack"
+    depends_on:
+      - kafka
+      - schema-registry
+      - mysql
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8083/connectors"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    ports:
+      - "8083:8083"
+    environment:
+      BOOTSTRAP_SERVERS: kafka:9092
+      GROUP_ID: "1"
+      CONFIG_STORAGE_TOPIC: _connect_configs
+      OFFSET_STORAGE_TOPIC: _connect_offsets
+      STATUS_STORAGE_TOPIC: _connect_statuses
+      KEY_CONVERTER: io.confluent.connect.avro.AvroConverter
+      KEY_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      VALUE_CONVERTER: io.confluent.connect.avro.AvroConverter
+      VALUE_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      REST_ADVERTISED_HOST_NAME: connect
+      LOG4J_ROOT_LOGLEVEL: INFO
+      SCHEMA_REGISTRY_KAFKASTORE_TIMEOUT_MS: 2000
+      SCHEMA_REGISTRY_KAFKASTORE_INIT_TIMEOUT_MS: 30000
+
+
+  mysql:
+    image: mysql:5.7
+    platform: linux/amd64
+    labels:
+      - "app=kafka-stack"
+    ports:
+      - "3355:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpass
+      MYSQL_DATABASE: demo
+      MYSQL_USER: debezium
+      MYSQL_PASSWORD: debezium_pass
+    command:
+      --gtid-mode=ON
+      --log-bin=mysql-bin
+      --binlog-format=ROW
+      --binlog-row-image=FULL
+      --server-id=223344
+      --enforce-gtid-consistency=ON
+    volumes:
+      - ./scripts/first_migration.sql:/docker-entrypoint-initdb.d/first_migration.sql 
+
+
+
+  connector-registrator:
+    image: curlimages/curl:7.87.0
+    platform: linux/amd64
+    depends_on:
+      - connect
+    volumes:
+      - ./debezium-mysql-connector.json:/debezium-mysql-connector.json
+      - ./scripts/register-connector.sh:/register-connector.sh
+    command: ["sh", "/register-connector.sh"]
+    restart: "no"
+
+
+  postgres:
+    image: postgres:13
+    platform: linux/amd64
+    container_name: postgres
+    environment:
+      POSTGRES_USER: conduktor
+      POSTGRES_PASSWORD: conduktor
+      POSTGRES_DB: conduktor
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U conduktor -d conduktor"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+
+  conduktor-platform:
+    image: conduktor/conduktor-platform
+    platform: linux/amd64
+    container_name: conduktor-platform
+    depends_on:
+      kafka:
+        condition: service_healthy
+      schema-registry:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8087:8080"
+    volumes:
+      - "./scripts/conduktor-config.yaml:/opt/conduktor/console-config.yaml"
+    environment:
+      KAFKA_BROKERS: "kafka:9092"
+      SCHEMA_REGISTRY_URL: "http://schema-registry:8081"
+      CDK_IN_CONF_FILE: /opt/conduktor/console-config.yaml
+
+  clickhouse-server:
+    image: clickhouse/clickhouse-server
+    container_name: some-clickhouse-server
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+      - "9440:9440"
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - clickhouse_config:/etc/clickhouse-server 
+    environment:
+      - CLICKHOUSE_USER=default
+      - CLICKHOUSE_PASSWORD=
+      - CLICKHOUSE_DB=default
+
+
+  # Airflow for Orchestration
+  airflow-db:
+    image: postgres:13
+    container_name: airflow_db
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow_password
+      POSTGRES_DB: airflow_db
+    ports:
+      - "5434:5432"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 10s
+      retries: 5
+
+  airflow-webserver:
+    image: apache/airflow:2.10.4
+    container_name: airflow-webserver
+    depends_on:
+      - airflow-db
+    environment:
+      AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow_password@airflow_db:5432/airflow_db
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      _AIRFLOW_DB_MIGRATE: 'true'
+      _AIRFLOW_WWW_USER_CREATE: 'true'
+      _AIRFLOW_WWW_USER_USERNAME: user
+      _AIRFLOW_WWW_USER_PASSWORD: password
+      _PIP_ADDITIONAL_REQUIREMENTS: >
+        apache-airflow==2.10.4
+        clickhouse-driver
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./logs:/opt/airflow/logs
+      - ./plugins:/opt/airflow/plugins
+    ports:
+      - "8080:8080"  # Airflow UI port
+    command: >
+      bash -c "
+      airflow db init &&
+      airflow webserver"
+
+  airflow-scheduler:
+    image: apache/airflow:2.10.4
+    container_name: airflow-scheduler
+    depends_on:
+      - airflow-db
+      - airflow-webserver
+    environment:
+      AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow_password@airflow_db:5432/airflow_db
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      _PIP_ADDITIONAL_REQUIREMENTS: >
+        apache-airflow==2.10.4
+        clickhouse-driver
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./logs:/opt/airflow/logs
+      - ./plugins:/opt/airflow/plugins
+    command: airflow scheduler
+
+  # Flink for stream processing
+  flink-jobmanager:
+    image: flink-kafka:latest
+    container_name: flink-jobmanager
+    ports:
+      - "8089:8081"  # Flink Job Manager UI
+      - "8888:8888" 
+    command: jobmanager
+    environment:
+      - |
+        FLINK_PROPERTIES=
+        jobmanager.rpc.address: flink-jobmanager
+    volumes:
+      - ./jars:/opt/flink/my_jars
+    entrypoint: >
+      /bin/bash -c "
+      pip install apache-flink &&
+      pip install notebook &&  
+      jupyter notebook --ip 0.0.0.0 --no-browser --allow-root &  
+      /docker-entrypoint.sh jobmanager"  
+
+  flink-taskmanager:
+    image: flink-kafka:latest
+    container_name: flink-taskmanager
+    depends_on:
+      - flink-jobmanager
+    command: taskmanager
+    environment:
+      - |
+        FLINK_PROPERTIES=
+        jobmanager.rpc.address: flink-jobmanager
+        taskmanager.numberOfTaskSlots: 2
+    entrypoint: /docker-entrypoint.sh taskmanager
+
+
+volumes:
+  postgres_data:
+  clickhouse_data:
+  clickhouse_config:
