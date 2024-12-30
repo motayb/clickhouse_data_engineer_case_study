@@ -1,5 +1,7 @@
 # Clickhouse Senior Data Engineer Case Study
 
+---
+
 ## Scenario 1: Clickhouse & Kafka Challenge
 
 ``` mermaid
