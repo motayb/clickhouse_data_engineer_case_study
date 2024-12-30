@@ -131,4 +131,8 @@ graph LR
 - **Low Cardinality**: Replace string columns with LowCardinality to save memory and improve query performance for columns with repetitive values.
 - **Enum**: Use Enum8 or Enum16 data types for columns with a small, fixed set of values, reducing storage requirements and enhancing query efficiency.
 
+### Deduplication Logic
+
+- **ReplacingMergeTree**: Use the ReplacingMergeTree engine for deduplication by identifying and consolidating rows based on a unique identifier (e.g., a version column). This ensures that only the latest or most relevant data remains in the table.
+
 
