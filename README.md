@@ -112,3 +112,23 @@ graph LR
     - Ingest new data and query again.
 
 
+## Future Recommendations for ClickHouse Optimization
+
+### Scaling Options
+
+- **Horizontal Scaling**: Deploy ClickHouse shards and replicas to handle increased data volume and improve query concurrency.
+- **Flink Parallelism**: Scale Flink jobs by adding more task slots and optimizing resource allocation in the cluster.
+
+### Optimizations
+
+- **Data Retention Policies**: Implement TTL (Time-to-Live) settings in ClickHouse to automatically clean up old, unused data.
+- **Materialized Views**: Explore pre-aggregated views for complex queries to further reduce query times.
+- **Compression**: Use ZSTD or LZ4 compression algorithms for MergeTree tables to minimize storage usage while maintaining read performance.
+- **Partitioning**: Optimize table partitioning based on time intervals (e.g., monthly or daily) or business keys to reduce query scan ranges and improve performance.
+
+### Data Types for Optimization
+
+- **Low Cardinality**: Replace string columns with LowCardinality to save memory and improve query performance for columns with repetitive values.
+- **Enum**: Use Enum8 or Enum16 data types for columns with a small, fixed set of values, reducing storage requirements and enhancing query efficiency.
+
+
