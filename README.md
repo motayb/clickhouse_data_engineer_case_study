@@ -111,6 +111,7 @@ graph LR
 7. **Query the New Table**
     - Ingest new data and query again.
 
+---
 
 ## Future Recommendations for ClickHouse Optimization
 
